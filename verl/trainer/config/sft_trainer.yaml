@@ -59,6 +59,8 @@ trainer:
   total_training_steps: null
   logger: [ 'console', 'wandb' ]
   seed: 1
+  s3_base_path: null
+  ckpt_namespace: null
   save_freq: -1
   test_freq: -1
   nnodes: 1
