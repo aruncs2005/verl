@@ -615,7 +615,7 @@ class FSDPSFTTrainer:
         self.resume_global_step = resume_step
 
         # Use checkpoint manager to load model state
-        self.checkpoint_manager.load_checkpoint(checkpoint_path)
+        self.checkpoint_manager.load_checkpoint(checkpoint_path,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace)
         log_with_rank(
             f"Successfully loaded model checkpoint from {checkpoint_path} (step {resume_step})",
             logger=logger,
