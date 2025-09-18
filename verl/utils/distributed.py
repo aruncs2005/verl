@@ -13,43 +13,17 @@
 # limitations under the License.
 """Utilities for distributed training."""
 
-import ctypes
 import os
 from datetime import timedelta
 
-import ray
 import torch.distributed
 
-from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device, is_npu_available
-
-
-def set_numa_affinity():
-    libnuma = ctypes.CDLL("libnuma.so")
-    if libnuma.numa_available() < 0:
-        return
-
-    initialized = False
-    try:
-        import pynvml
-
-        pynvml.nvmlInit()
-        initialized = True
-        device_name = "NPU" if is_npu_available else "GPU"
-        local_rank = int(ray.get_runtime_context().get_accelerator_ids()[device_name][0])
-        handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
-        pynvml.nvmlDeviceSetCpuAffinity(handle)
-    except ImportError:
-        print("Warning: pynvml not available, skipping NUMA affinity setup")
-    except Exception as e:
-        print(f"Warning: Failed to set NUMA affinity: {e}")
-    finally:
-        if initialized:
-            pynvml.nvmlShutdown()
+from verl.utils.device import get_device_name, get_nccl_backend, get_torch_device
 
 
 def initialize_global_process_group(timeout_second=36000):
     torch.distributed.init_process_group(
-        get_nccl_backend(),
+        backend=f"cpu:gloo,{get_device_name()}:{get_nccl_backend()}",
         timeout=timedelta(seconds=timeout_second),
         init_method=os.environ.get("DIST_INIT_METHOD", None),
     )
