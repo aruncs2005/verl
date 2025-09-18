@@ -539,7 +539,7 @@ class FSDPSFTTrainer:
 
         # Use checkpoint manager to save
         self.checkpoint_manager.save_checkpoint(
-            local_path=local_global_step_folder, global_step=step,s3_base_path=self.config.s3_base_path, ckpt_namespace=self.config.ckpt_namespace,max_ckpt_to_keep=max_ckpt_to_keep
+            local_path=local_global_step_folder, global_step=step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace,max_ckpt_to_keep=max_ckpt_to_keep
         )
 
         # Save dataloader state
