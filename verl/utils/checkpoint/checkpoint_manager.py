@@ -118,11 +118,11 @@ class BaseCheckpointManager:
         """
         return "extra" in self.checkpoint_load_contents
 
-    def load_checkpoint(self, local_path: str, hdfs_path: str = None, del_local_after_load: bool = False):
+    def load_checkpoint(self, local_path: str, hdfs_path: str = None, s3_base_path: str= None, ckpt_namespace:str = None, del_local_after_load: bool = False):
         raise NotImplementedError
 
     def save_checkpoint(
-        self, local_path: str, hdfs_path: str = None, global_step: int = 0, max_ckpt_to_keep: int = None
+        self, local_path: str, hdfs_path: str = None, global_step: int = 0, s3_base_path: str = None, ckpt_namespace: str = None,max_ckpt_to_keep: int = None
     ):
         raise NotImplementedError
 
