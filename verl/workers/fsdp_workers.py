@@ -994,8 +994,17 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
 
+        # Get S3 parameters from checkpoint config if available
+        s3_base_path = getattr(self.config.actor.checkpoint, 's3_base_path', None)
+        ckpt_namespace = getattr(self.config.actor.checkpoint, 'ckpt_namespace', None)
+        
         self.checkpoint_manager.save_checkpoint(
-            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
+            local_path=local_path, 
+            hdfs_path=hdfs_path, 
+            global_step=global_step,
+            s3_base_path=s3_base_path, 
+            ckpt_namespace=ckpt_namespace, 
+            max_ckpt_to_keep=max_ckpt_to_keep
         )
         dist.barrier()
 
@@ -1471,8 +1480,17 @@ class CriticWorker(Worker, DistProfilerExtension):
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.critic_module)
 
+        # Get S3 parameters from checkpoint config if available
+        s3_base_path = getattr(self.config.checkpoint, 's3_base_path', None)
+        ckpt_namespace = getattr(self.config.checkpoint, 'ckpt_namespace', None)
+        
         self.checkpoint_manager.save_checkpoint(
-            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
+            local_path=local_path, 
+            hdfs_path=hdfs_path, 
+            global_step=global_step,
+            s3_base_path=s3_base_path, 
+            ckpt_namespace=ckpt_namespace, 
+            max_ckpt_to_keep=max_ckpt_to_keep
         )
 
         torch.distributed.barrier()
