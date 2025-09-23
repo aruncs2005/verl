@@ -100,6 +100,8 @@ shuffle: false
 # checkpoint configs
 checkpoint:
 
+
+
   # Target dataclass for this configuration
   _target_: verl.trainer.config.CheckpointConfig
 
@@ -113,6 +115,9 @@ checkpoint:
 
   # Whether to save checkpoints asynchronously. Only effective for Megatron as of now.
   async_save: False
+
+  s3_base_path: none
+  ckpt_namespace: none
 
 # optimizer configs
 optim:
