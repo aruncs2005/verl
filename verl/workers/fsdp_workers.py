@@ -995,7 +995,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
 
         self.checkpoint_manager.save_checkpoint(
-            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
+            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path="s3://sagemaker-hyperpod-eks-ak-bucket-535002850097-us-west-1/checkpoints", ckpt_namespace="testnsray14", max_ckpt_to_keep=max_ckpt_to_keep
         )
         dist.barrier()
 
@@ -1471,10 +1471,13 @@ class CriticWorker(Worker, DistProfilerExtension):
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.critic_module)
 
-        self.checkpoint_manager.save_checkpoint(
-            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
-        )
+        # self.checkpoint_manager.save_checkpoint(
+        #     local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
+        # )
 
+        self.checkpoint_manager.save_checkpoint(
+            local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path="s3://sagemaker-hyperpod-eks-ak-bucket-535002850097-us-west-1/checkpoints", ckpt_namespace="testnsray14", max_ckpt_to_keep=max_ckpt_to_keep
+        )
         torch.distributed.barrier()
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.critic_module)
