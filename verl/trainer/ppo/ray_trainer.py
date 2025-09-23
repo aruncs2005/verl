@@ -654,19 +654,9 @@ class RayPPOTrainer:
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
-            
-            # Propagate S3 configuration to actor checkpoint config
-            actor_config = self.config.actor_rollout_ref
-            if hasattr(self.config.trainer, 's3_base_path') and self.config.trainer.s3_base_path:
-                if hasattr(actor_config.actor, 'checkpoint'):
-                    actor_config.actor.checkpoint.s3_base_path = self.config.trainer.s3_base_path
-            if hasattr(self.config.trainer, 'ckpt_namespace') and self.config.trainer.ckpt_namespace:
-                if hasattr(actor_config.actor, 'checkpoint'):
-                    actor_config.actor.checkpoint.ckpt_namespace = self.config.trainer.ckpt_namespace
-            
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
-                config=actor_config,
+                config=self.config.actor_rollout_ref,
                 role="actor_rollout",
             )
             self.resource_pool_to_cls[resource_pool]["actor_rollout"] = actor_rollout_cls
@@ -677,15 +667,6 @@ class RayPPOTrainer:
         if self.use_critic:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.Critic)
             critic_cfg = omega_conf_to_dataclass(self.config.critic)
-            
-            # Propagate S3 configuration to critic checkpoint config
-            if hasattr(self.config.trainer, 's3_base_path') and self.config.trainer.s3_base_path:
-                if hasattr(critic_cfg, 'checkpoint'):
-                    critic_cfg.checkpoint.s3_base_path = self.config.trainer.s3_base_path
-            if hasattr(self.config.trainer, 'ckpt_namespace') and self.config.trainer.ckpt_namespace:
-                if hasattr(critic_cfg, 'checkpoint'):
-                    critic_cfg.checkpoint.ckpt_namespace = self.config.trainer.ckpt_namespace
-            
             critic_cls = RayClassWithInitArgs(cls=self.role_worker_mapping[Role.Critic], config=critic_cfg)
             self.resource_pool_to_cls[resource_pool]["critic"] = critic_cls
 
