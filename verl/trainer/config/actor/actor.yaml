@@ -99,9 +99,7 @@ shuffle: false
 
 # checkpoint configs
 checkpoint:
-  #managed tiered checkpoint changes.
-  s3_base_path: null
-  ckpt_namespace: null
+
   # Target dataclass for this configuration
   _target_: verl.trainer.config.CheckpointConfig
 
