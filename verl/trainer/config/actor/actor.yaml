@@ -114,6 +114,10 @@ checkpoint:
   # Whether to save checkpoints asynchronously. Only effective for Megatron as of now.
   async_save: False
 
+  s3_base_path: none
+  ckpt_namespace: none
+
+
 # optimizer configs
 optim:
 
