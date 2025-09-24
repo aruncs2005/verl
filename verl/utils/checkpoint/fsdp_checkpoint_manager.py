@@ -388,7 +388,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             if hasattr(model_config, "auto_map"):
                 custom_object_save(unwrap_model, hf_dir, config=model_config)
             bucket, prefix = split_s3_uri(s3_base_path)
-            upload_folder_to_s3(local_path,bucket, prefix + "/testns12")
+            upload_folder_to_s3(local_path,bucket, prefix + "/" + ckpt_namespace)
 
 
         torch.distributed.barrier()
