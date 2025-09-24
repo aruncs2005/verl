@@ -997,8 +997,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         #     local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path=self.config.s3_base_path, ckpt_namespace=self.config.ckpt_namespace, max_ckpt_to_keep=max_ckpt_to_keep
         # )
 
-        logger.log(logging.INFO,"printing config parameters")
-        logger.log(logging.INFO,"configs are {self.config}")
+        log_with_rank(f"printing config parameters",rank=dist.get_rank(),
+                logger=logger,
+                log_only_rank_0=True,)
+        log_with_rank(f"configs are {self.config}",rank=dist.get_rank(),
+                logger=logger,
+                log_only_rank_0=True,)
       
         self.checkpoint_manager.save_checkpoint(
             local_path=local_path, hdfs_path=hdfs_path, global_step=global_step,s3_base_path="s3://sagemaker-hyperpod-eks-ak-bucket-535002850097-us-west-1/checkpoints", ckpt_namespace="testnsray14", max_ckpt_to_keep=max_ckpt_to_keep
