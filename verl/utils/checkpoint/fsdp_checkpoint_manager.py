@@ -324,13 +324,15 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         # Create StorageWriter (cache pinned memory for speed on repeat saves)
         #if not hasattr(self, "checkpoint_writer"):
         torch.cuda.empty_cache()
-        namespace=os.environ.get('TRAINING_JOB_NAME', f'job-{int(time.time())}')
+        #namespace=os.environ.get('TRAINING_JOB_NAME', f'job-{int(time.time())}')
+        s3_ckpt_freq = 100
+        save_to_s3 = global_step % s3_ckpt_freq == 0
         smcheckpointconfig = SageMakerCheckpointConfig(
                 namespace=ckpt_namespace,
                 world_size=torch.distributed.get_world_size(),
                 s3_tier_base_path=s3_base_path,
                 logger=logger,
-                save_to_s3=True
+                save_to_s3=save_to_s3
             )
         self.checkpoint_writer = SageMakerTieredStorageWriter(
             checkpoint_config=smcheckpointconfig,
