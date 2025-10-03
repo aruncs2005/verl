@@ -325,14 +325,14 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         #if not hasattr(self, "checkpoint_writer"):
         torch.cuda.empty_cache()
         #namespace=os.environ.get('TRAINING_JOB_NAME', f'job-{int(time.time())}')
-        s3_ckpt_freq = 100
-        save_to_s3 = global_step % s3_ckpt_freq == 0
+        # s3_ckpt_freq = 100
+        # save_to_s3 = global_step % s3_ckpt_freq == 0
         smcheckpointconfig = SageMakerCheckpointConfig(
                 namespace=ckpt_namespace,
                 world_size=torch.distributed.get_world_size(),
                 s3_tier_base_path=s3_base_path,
                 logger=logger,
-                save_to_s3=save_to_s3
+                save_to_s3=False
             )
         self.checkpoint_writer = SageMakerTieredStorageWriter(
             checkpoint_config=smcheckpointconfig,
@@ -354,7 +354,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         torch.distributed.barrier()
 
         # Rank 0: Save HF tokenizer and configs in HF standardized directory
-        if self.rank == 0:
+        if self.rank == -1:
             hf_dir = os.path.join(local_path, "huggingface")
             local_mkdir_safe(hf_dir)
             # Unwrap model for Hugging Face config
