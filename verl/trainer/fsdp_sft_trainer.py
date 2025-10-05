@@ -792,8 +792,11 @@ class FSDPSFTTrainer:
 
 def run_sft(config):
     device_name = get_device_name()
-    local_rank, rank, world_size = initialize_global_process_group()
+    #local_rank, rank, world_size = initialize_global_process_group()
+    from verl.utils.distributed import initialize_global_process_group_ray
 
+    initialize_global_process_group_ray()
+    world_size = int(os.environ["WORLD_SIZE"])
     device_mesh = init_device_mesh(device_type=device_name, mesh_shape=(world_size,), mesh_dim_names=("fsdp",))
     dp_size = world_size // config.ulysses_sequence_parallel_size
     ulysses_device_mesh = init_device_mesh(
