@@ -79,6 +79,10 @@ if is_cuda_available:
 elif is_npu_available:
     from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
 
+import ray
+from ray.train import ScalingConfig
+from ray.train.torch import TorchTrainer
+
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
 
@@ -819,9 +823,24 @@ def run_sft(config):
     destroy_global_process_group()
 
 
+def launch_ray(config):
+        logger.info("🚀 Starting SFT Training function")
+        num_workers = int(
+            os.environ.get("RAY_NUM_WORKERS", 1) * 8
+        )
+        scaling_config = ScalingConfig(
+            num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
+        )  # always keep resources_per_worker to 1 GPU per worker. RayTrainer will automatically set the number of workers based on the number of nodes and GPUs per node.
+        ray_trainer = TorchTrainer(
+            run_sft, train_loop_config=config,torch_config=ray.train.torch.TorchConfig(backend=f"cpu:gloo,cuda:nccl"), scaling_config=scaling_config
+        )
+        ray_trainer.fit()
+
+
 @hydra.main(config_path="config", config_name="sft_trainer", version_base=None)
 def main(config):
-    run_sft(config)
+    launch_ray(config)
+
 
 
 def create_sft_dataset(data_paths, data_config, tokenizer):
