@@ -789,6 +789,48 @@ class FSDPSFTTrainer:
                         print(f"Final validation metrics: {last_valid_metric}")
                     return
 
+def custom_run_sft(config: DictConfig) -> None:
+    """Custom function to run Ray distributed SFT training using VERL's native SFT execution pattern.
+    Function is a modification of run_sft from verl/trainer/fsdp_sft_trainer.py
+    Args:
+        config: Training configuration
+    """
+    from torch.distributed.device_mesh import init_device_mesh
+    from verl.utils.fs import copy_to_local
+    from verl.trainer.fsdp_sft_trainer import FSDPSFTTrainer, create_sft_dataset
+    from verl.utils import hf_tokenizer
+
+    device_name = "cuda"
+    world_size = int(os.environ["WORLD_SIZE"])  # automatically set by Ray
+    device_mesh = init_device_mesh(
+        device_type=device_name, mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
+    )
+    dp_size = world_size // config.ulysses_sequence_parallel_size
+    ulysses_device_mesh = init_device_mesh(
+        device_type=device_name,
+        mesh_shape=(dp_size, config.ulysses_sequence_parallel_size),
+        mesh_dim_names=("dp", "sp"),
+    )
+    logger.info(
+        f"dp size: {dp_size}, sp size: {config.ulysses_sequence_parallel_size}, world size: {world_size}"
+    )
+    local_model_path = copy_to_local(src=config.model.partial_pretrain, verbose=True)
+    tokenizer = hf_tokenizer(
+        local_model_path, trust_remote_code=config.model.trust_remote_code
+    )
+    train_dataset = create_sft_dataset(config.data.train_files, config.data, tokenizer)
+    val_dataset = create_sft_dataset(config.data.val_files, config.data, tokenizer)
+
+    trainer = FSDPSFTTrainer(
+        config=config,
+        device_mesh=device_mesh,
+        ulysses_device_mesh=ulysses_device_mesh,
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+    )
+
+    trainer.fit()
 
 def run_sft(config):
     device_name = get_device_name()
@@ -827,19 +869,14 @@ def run_sft(config):
 
 
 def launch_ray(config):
+        
         logger.info("🚀 Starting SFT Training function")
-        #import ray
-        ray.init(address="auto") 
-        # num_workers = int(
-        #     os.environ.get("RAY_NUM_WORKERS", 1) * 8
-        # )
         num_workers = 32
-        logger.info(f"*****num_workers {num_workers}")
         scaling_config = ScalingConfig(
             num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
         )  # always keep resources_per_worker to 1 GPU per worker. RayTrainer will automatically set the number of workers based on the number of nodes and GPUs per node.
         ray_trainer = TorchTrainer(
-            run_sft, train_loop_config=config,torch_config=ray.train.torch.TorchConfig(backend=f"cpu:gloo,cuda:nccl"), scaling_config=scaling_config
+            custom_run_sft, train_loop_config=config,torch_config=ray.train.torch.TorchConfig(backend=f"cpu:gloo,cuda:nccl"), scaling_config=scaling_config
         )
         ray_trainer.fit()
 
