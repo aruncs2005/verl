@@ -831,6 +831,7 @@ def launch_ray(config):
         num_workers = int(
             os.environ.get("RAY_NUM_WORKERS", 1) * 8
         )
+        logger.info(f"*****num_workers {num_workers}")
         scaling_config = ScalingConfig(
             num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
         )  # always keep resources_per_worker to 1 GPU per worker. RayTrainer will automatically set the number of workers based on the number of nodes and GPUs per node.
