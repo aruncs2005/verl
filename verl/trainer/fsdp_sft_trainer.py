@@ -828,9 +828,10 @@ def run_sft(config):
 
 def launch_ray(config):
         logger.info("🚀 Starting SFT Training function")
-        num_workers = int(
-            os.environ.get("RAY_NUM_WORKERS", 1) * 8
-        )
+        # num_workers = int(
+        #     os.environ.get("RAY_NUM_WORKERS", 1) * 8
+        # )
+        num_workers = 32
         logger.info(f"*****num_workers {num_workers}")
         scaling_config = ScalingConfig(
             num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
