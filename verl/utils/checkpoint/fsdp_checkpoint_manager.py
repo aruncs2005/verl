@@ -349,7 +349,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             storage_writer=self.checkpoint_writer,
             checkpoint_id=checkpoint_id,
         )
-        self.checkpoint_future.result()
+        #self.checkpoint_future.result()
 
         torch.distributed.barrier()
 
