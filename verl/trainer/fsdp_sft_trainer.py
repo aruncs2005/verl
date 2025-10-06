@@ -547,7 +547,7 @@ class FSDPSFTTrainer:
         )
 
         # Save dataloader state
-        if self.device_mesh.get_rank() == -1:
+        if self.device_mesh.get_rank() == 0:
             local_mkdir_safe(local_global_step_folder)
             dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
 
