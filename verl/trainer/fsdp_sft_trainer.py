@@ -828,13 +828,15 @@ def run_sft(config):
 
 def launch_ray(config):
         logger.info("🚀 Starting SFT Training function")
+        #import ray
+        ray.init(address="auto") 
         # num_workers = int(
         #     os.environ.get("RAY_NUM_WORKERS", 1) * 8
         # )
-        num_workers = 32
+        num_workers = 4
         logger.info(f"*****num_workers {num_workers}")
         scaling_config = ScalingConfig(
-            num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
+            num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 8}
         )  # always keep resources_per_worker to 1 GPU per worker. RayTrainer will automatically set the number of workers based on the number of nodes and GPUs per node.
         ray_trainer = TorchTrainer(
             run_sft, train_loop_config=config,torch_config=ray.train.torch.TorchConfig(backend=f"cpu:gloo,cuda:nccl"), scaling_config=scaling_config
