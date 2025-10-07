@@ -67,9 +67,8 @@ from botocore.exceptions import NoCredentialsError, ClientError
 def _get_checkpoint_process_group():
     # Only the main worker needs a checkpointing process group
     if dist.get_rank() == 0:
-        dist.new_group(backend="gloo", rank=list(range(dist.get_world_size())))
-    return dist.new_group(backend="gloo", rank=list(range(dist.get_world_size())))
-
+        dist.new_group(backend="gloo", ranks=list(range(dist.get_world_size())))
+    return dist.new_group(backend="gloo", ranks=list(range(dist.get_world_size())))
 
 
 def upload_folder_to_s3(local_folder, bucket_name, s3_folder_prefix=""):
