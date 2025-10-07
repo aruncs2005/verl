@@ -257,7 +257,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
 
 
-    def save_checkpoint(self, local_path: str, hdfs_path: str = None, global_step: int = 0,s3_base_path: str = None, ckpt_namespace: str = None , max_ckpt_to_keep=None):
+    def save_checkpoint(self, local_path: str, hdfs_path: str = None,
+                        global_step: int = 0,s3_base_path: str = None,
+                        ckpt_namespace: str = None , max_ckpt_to_keep=None):
         """
         Save an FSDP checkpoint for this rank.
 
@@ -275,31 +277,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             global_step: Current training step (used for bookkeeping).
             max_ckpt_to_keep: Number of recent checkpoints to retain.
         """
-        if local_path is None:
-            return
-
-        # record the previous global step
-        self.previous_global_step = global_step
-
-        # remove previous local_path, only rank 0 should do this
-        if local_path is None:
-            return
-
-        # Rotate old checkpoints manually as before (rank 0 only)
-        if (
-            self.rank == 0
-            and max_ckpt_to_keep
-            and isinstance(max_ckpt_to_keep, int)
-            and max_ckpt_to_keep > 0
-            and len(self.previous_saved_paths) >= max_ckpt_to_keep
-        ):
-            keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep + 1
-            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
-            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
-
-        local_path = local_mkdir_safe(local_path)
-        torch.distributed.barrier()
-
+        func_start = time.perf_counter()
         # Ensure required components exist
         assert self.model is not None, "Model must be provided for checkpointing"
         if self.should_save_optimizer:
@@ -314,145 +292,67 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             }
 
         # Wrap into DCP Stateful object
+        start = time.perf_counter()
         state = CheckpointState(
             self.model,
             self.optimizer if self.should_save_optimizer else None,
             self.lr_scheduler if self.should_save_extra else None,
             rng_state_fn=get_rng_state if self.should_save_extra else None,
         )
+        state_creation_time = time.perf_counter() - start
 
         # Create StorageWriter (cache pinned memory for speed on repeat saves)
-        #if not hasattr(self, "checkpoint_writer"):
+        start = time.perf_counter()
         torch.cuda.empty_cache()
-        #namespace=os.environ.get('TRAINING_JOB_NAME', f'job-{int(time.time())}')
-        # s3_ckpt_freq = 100
-        # save_to_s3 = global_step % s3_ckpt_freq == 0
+        cache_empty_time = time.perf_counter() - start
+
+        start = time.perf_counter()
         smcheckpointconfig = SageMakerCheckpointConfig(
-                namespace=ckpt_namespace,
-                world_size=torch.distributed.get_world_size(),
-                s3_tier_base_path=s3_base_path,
-                logger=logger,
-                save_to_s3=False
-            )
+            namespace=ckpt_namespace,
+            world_size=torch.distributed.get_world_size(),
+            s3_tier_base_path=s3_base_path,
+            logger=logger,
+            save_to_s3=False
+        )
         self.checkpoint_writer = SageMakerTieredStorageWriter(
             checkpoint_config=smcheckpointconfig,
             step=global_step
-            )
-        
-        # Await previous async save result to avoid multiple concurrent saves
+        )
+        tiered_ckpt_init_time = time.perf_counter() - start
 
+        # Await previous async save result to avoid multiple concurrent saves
+        future_wait_time = 0
         if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
+            start = time.perf_counter()
             exc = self.checkpoint_future.exception()
             if exc:
                 print(f"Failure in saving previous checkpoint:{str(exc)}")
                 #Handle failures as required
             else:
                 result = self.checkpoint_future.result()
-        # if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
-        #     self.checkpoint_future.result()
+            future_wait_time = time.perf_counter() - start
 
+        start = time.perf_counter()
         checkpoint_id = f"step_{global_step}"
         self.checkpoint_future = dcp.async_save(
             state_dict={"app": state},
             storage_writer=self.checkpoint_writer,
             checkpoint_id=checkpoint_id,
         )
-        #self.checkpoint_future.result()
+        async_save_time = time.perf_counter() - start
 
+        start = time.perf_counter()
         torch.distributed.barrier()
-
-        # Rank 0: Save HF tokenizer and configs in HF standardized directory
-        if self.rank == -1:
-            hf_dir = os.path.join(local_path, "huggingface")
-            local_mkdir_safe(hf_dir)
-            # Unwrap model for Hugging Face config
-            unwrap_model = getattr(self.model, "_fsdp_wrapped_module", self.model)
-
-            # Save Model config
-            model_config = unwrap_model.config
-            model_config.save_pretrained(hf_dir)
-
-            # Save tokenizer or processing class if defined
-            if hasattr(self, "processing_class"):
-                self.processing_class.save_pretrained(hf_dir)
-
-            # Save generation config if available
-            generation_config = None
-            if hasattr(unwrap_model, "can_generate") and unwrap_model.can_generate():
-                try:
-                    from transformers import GenerationConfig
-                    if hasattr(model_config, "name_or_path") and model_config.name_or_path:
-                        generation_config = GenerationConfig.from_pretrained(model_config.name_or_path)
-                        generation_config.save_pretrained(hf_dir)
-                except Exception:
-                    pass
-            # Save fsdp config JSON
-            fsdp_config_path = os.path.join(local_path, "fsdp_config.json")
-            fsdp_config = {
-                "FSDP_version": fsdp_version(self.model),
-                "world_size": self.world_size,
-            }
-            with open(fsdp_config_path, "w") as f:
-                json.dump(fsdp_config, f, indent=4)
-            # If needed, save custom model code or auto_map logic here as well
-            if hasattr(model_config, "auto_map"):
-                custom_object_save(unwrap_model, hf_dir, config=model_config)
-            bucket, prefix = split_s3_uri(s3_base_path)
-            upload_folder_to_s3(local_path,bucket, prefix + "/" + ckpt_namespace)
+        barrier_wait_time = time.perf_counter() - start
+        func_end_time = time.perf_counter() - func_start
+        print(f"state_creation_time:{state_creation_time:.2f}s, "
+              f"cache_empty_time:{cache_empty_time:.2f}s, "
+              f"tiered_ckpt_init_time:{tiered_ckpt_init_time:2f}s, "
+              f"future_wait_time:{future_wait_time:2f}s, "
+              f"async_save_time:{async_save_time}s, "
+              f"barrier_wait_time:{barrier_wait_time}s, "
+              f"total_time:{func_end_time}s")
 
 
-        torch.distributed.barrier()
-
-        # Optionally save full non-sharded HF model (rank 0 only)
-        if self.should_save_hf_model and self.rank == 0:
-            # Get full FSDP state dict offloaded to CPU
-            state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=True, rank0_only=True)
-            hf_local_path = os.path.join(local_path, "huggingface")
-            os.makedirs(hf_local_path, exist_ok=True)
-
-            arch = unwrap_model.config.architectures[0] if hasattr(unwrap_model.config, "architectures") else ""
-            if "ForTokenClassification" in arch:
-                from transformers import AutoModelForTokenClassification
-                auto_model_cls = AutoModelForTokenClassification
-            elif "ForCausalLM" in arch:
-                from transformers import AutoModelForCausalLM
-                auto_model_cls = AutoModelForCausalLM
-            elif "ForConditionalGeneration" in arch:
-                # Handle transformers versions
-                import transformers
-                from packaging import version
-                if version.parse(transformers.__version__) >= version.parse("4.54.0"):
-                    from transformers import AutoModelForImageTextToText
-                    auto_model_cls = AutoModelForImageTextToText
-                else:
-                    from transformers import AutoModelForVision2Seq
-                    auto_model_cls = AutoModelForVision2Seq
-            else:
-                raise NotImplementedError(f"Unknown architecture {arch}")
-
-            from accelerate import init_empty_weights
-            with init_empty_weights():
-                save_model = auto_model_cls.from_config(unwrap_model.config, torch_dtype=torch.bfloat16)
-            save_model.to_empty(device="cpu")
-
-            if save_model.can_generate():
-                if generation_config is not None:
-                    save_model.generation_config = generation_config
-                else:
-                    print("Warning: Generation config file not found, using model config fallback when saving hf_model.")
-
-            save_model.save_pretrained(hf_local_path, state_dict=state_dict)
-            bucket, prefix = split_s3_uri(s3_base_path)
-
-            upload_folder_to_s3(hf_local_path,bucket,prefix + "/" + ckpt_namespace + "/final_model")
 
 
-            del state_dict
-            del save_model
-
-        torch.distributed.barrier()
-
-        # Record this local path for checkpoint rotation
-        self.previous_saved_paths.append(local_path)
-
-   
