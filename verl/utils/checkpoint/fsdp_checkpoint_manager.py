@@ -321,7 +321,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         tiered_ckpt_init_time = time.perf_counter() - start
 
         # Await previous async save result to avoid multiple concurrent saves
-        future_wait_time = None
+        future_wait_time = 0
         if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
             start = time.perf_counter()
             exc = self.checkpoint_future.exception()
