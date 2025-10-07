@@ -308,16 +308,16 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
         start = time.perf_counter()
         smcheckpointconfig = SageMakerCheckpointConfig(
-                namespace=ckpt_namespace,
-                world_size=torch.distributed.get_world_size(),
-                s3_tier_base_path=s3_base_path,
-                logger=logger,
-                save_to_s3=False
-            )
+            namespace=ckpt_namespace,
+            world_size=torch.distributed.get_world_size(),
+            s3_tier_base_path=s3_base_path,
+            logger=logger,
+            save_to_s3=False
+        )
         self.checkpoint_writer = SageMakerTieredStorageWriter(
             checkpoint_config=smcheckpointconfig,
             step=global_step
-            )
+        )
         tiered_ckpt_init_time = time.perf_counter() - start
 
         # Await previous async save result to avoid multiple concurrent saves
@@ -345,7 +345,6 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         torch.distributed.barrier()
         barrier_wait_time = time.perf_counter() - start
         func_end_time = time.perf_counter() - func_start
-        print(f"{train_time:.2f}s")
         print(f"state_creation_time:{state_creation_time:.2f}s, "
               f"cache_empty_time:{cache_empty_time:.2f}s, "
               f"tiered_ckpt_init_time:{tiered_ckpt_init_time:2f}s, "
