@@ -55,11 +55,22 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.checkpoint import load
 import torch.distributed.checkpoint as dist_cp
+import torch.distributed as dist
 
 from torch.distributed.checkpoint.optimizer import load_sharded_optimizer_state_dict
 
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
+
+
+# Define a separate process group for checkpointing
+def _get_checkpoint_process_group():
+    # Only the main worker needs a checkpointing process group
+    if dist.get_rank() == 0:
+        dist.new_group(backend="gloo", rank=list(range(dist.get_world_size())))
+    return dist.new_group(backend="gloo", rank=list(range(dist.get_world_size())))
+
+
 
 def upload_folder_to_s3(local_folder, bucket_name, s3_folder_prefix=""):
     s3_client = boto3.client('s3')
@@ -292,7 +303,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             }
 
         # Wrap into DCP Stateful object
+        
         start = time.perf_counter()
+        checkpoint_pg = _get_checkpoint_process_group()
         state = CheckpointState(
             self.model,
             self.optimizer if self.should_save_optimizer else None,
@@ -338,6 +351,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             state_dict={"app": state},
             storage_writer=self.checkpoint_writer,
             checkpoint_id=checkpoint_id,
+            process_group=checkpoint_pg
         )
         self.checkpoint_future.result()
         async_save_time = time.perf_counter() - start
