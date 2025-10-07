@@ -341,15 +341,15 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         
         # Await previous async save result to avoid multiple concurrent saves
 
-        # if self.checkpoint_future is not None:
-        #     exc = self.checkpoint_future.exception()
-        #     if exc:
-        #         print(f"Failure in saving previous checkpoint:{str(exc)}")
-        #         #Handle failures as required
-        #     else:
-        #         result = self.checkpoint_future.result()
-        if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
-            self.checkpoint_future.result()
+        if self.checkpoint_future is not None:
+            exc = self.checkpoint_future.exception()
+            if exc:
+                print(f"Failure in saving previous checkpoint:{str(exc)}")
+                #Handle failures as required
+            else:
+                result = self.checkpoint_future.result()
+        # if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
+        #     self.checkpoint_future.result()
 
         checkpoint_id = f"step_{global_step}"
         self.checkpoint_future = dcp.async_save(
@@ -357,7 +357,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             storage_writer=self.checkpoint_writer,
             checkpoint_id=checkpoint_id,
         )
-        self.checkpoint_future.result()
+        #self.checkpoint_future.result()
 
         torch.distributed.barrier()
 
