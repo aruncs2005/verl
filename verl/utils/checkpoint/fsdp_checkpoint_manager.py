@@ -304,7 +304,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         # Wrap into DCP Stateful object
         
         start = time.perf_counter()
-        checkpoint_pg = _get_checkpoint_process_group()
+        #checkpoint_pg = _get_checkpoint_process_group()
         state = CheckpointState(
             self.model,
             self.optimizer if self.should_save_optimizer else None,
@@ -350,7 +350,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             state_dict={"app": state},
             storage_writer=self.checkpoint_writer,
             checkpoint_id=checkpoint_id,
-            process_group=checkpoint_pg
+            #process_group=checkpoint_pg
         )
         self.checkpoint_future.result()
         async_save_time = time.perf_counter() - start
