@@ -341,7 +341,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         
         # Await previous async save result to avoid multiple concurrent saves
 
-        if self.checkpoint_future is not None:
+        if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
             exc = self.checkpoint_future.exception()
             if exc:
                 print(f"Failure in saving previous checkpoint:{str(exc)}")
