@@ -350,7 +350,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             checkpoint_id=checkpoint_id,
         )
         future.result()
-        ckpt_save_time = time.perf_counter() - start
+        cpkt_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
         torch.distributed.barrier()
@@ -359,7 +359,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         print(f"Checkpoint path: {local_path} ",
               f"state_creation_time:{state_creation_time:.2f}s, "
               f"cache_empty_time:{cache_empty_time:.2f}s, "
-              f"ckpt_save_time:{cpkt_save_time}s, "
+              f"cpkt_save_time:{cpkt_save_time}s, "
               f"barrier_wait_time:{barrier_wait_time}s, "
               f"total_time:{func_end_time}s")
 
