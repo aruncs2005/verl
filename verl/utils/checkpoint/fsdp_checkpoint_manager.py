@@ -306,50 +306,60 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         torch.cuda.empty_cache()
         cache_empty_time = time.perf_counter() - start
 
-        start = time.perf_counter()
-        smcheckpointconfig = SageMakerCheckpointConfig(
-            namespace=ckpt_namespace,
-            world_size=torch.distributed.get_world_size(),
-            s3_tier_base_path=s3_base_path,
-            logger=logger,
-            save_to_s3=False
-        )
-        self.checkpoint_writer = SageMakerTieredStorageWriter(
-            checkpoint_config=smcheckpointconfig,
-            step=global_step
-        )
-        tiered_ckpt_init_time = time.perf_counter() - start
+        #start = time.perf_counter()
+        #smcheckpointconfig = SageMakerCheckpointConfig(
+        #    namespace=ckpt_namespace,
+        #    world_size=torch.distributed.get_world_size(),
+        #    s3_tier_base_path=s3_base_path,
+        #    logger=logger,
+        #    save_to_s3=False
+        #)
+        #self.checkpoint_writer = SageMakerTieredStorageWriter(
+        #    checkpoint_config=smcheckpointconfig,
+        #    step=global_step
+        #)
+        #tiered_ckpt_init_time = time.perf_counter() - start
 
         # Await previous async save result to avoid multiple concurrent saves
-        future_wait_time = 0
-        if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
-            start = time.perf_counter()
-            exc = self.checkpoint_future.exception()
-            if exc:
-                print(f"Failure in saving previous checkpoint:{str(exc)}")
-                #Handle failures as required
-            else:
-                result = self.checkpoint_future.result()
-            future_wait_time = time.perf_counter() - start
+        #future_wait_time = 0
+        #if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
+        #    start = time.perf_counter()
+        #    exc = self.checkpoint_future.exception()
+        #    if exc:
+        #        print(f"Failure in saving previous checkpoint:{str(exc)}")
+        #        #Handle failures as required
+        #    else:
+        #        result = self.checkpoint_future.result()
+        #    future_wait_time = time.perf_counter() - start
 
-        start = time.perf_counter()
+        #start = time.perf_counter()
+        #checkpoint_id = f"step_{global_step}"
+        #self.checkpoint_future = dcp.async_save(
+        #    state_dict={"app": state},
+        #    storage_writer=self.checkpoint_writer,
+        #    checkpoint_id=checkpoint_id,
+        #)
+        #async_save_time = time.perf_counter() - start
+
+        writer = FileSystemWriter(local_path)
         checkpoint_id = f"step_{global_step}"
-        self.checkpoint_future = dcp.async_save(
+        start = time.perf_counter()
+        future = dcp.async_save(
             state_dict={"app": state},
-            storage_writer=self.checkpoint_writer,
+            storage_writer=writer,
             checkpoint_id=checkpoint_id,
         )
-        async_save_time = time.perf_counter() - start
+        future.result()
+        ckpt_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
         torch.distributed.barrier()
         barrier_wait_time = time.perf_counter() - start
         func_end_time = time.perf_counter() - func_start
-        print(f"state_creation_time:{state_creation_time:.2f}s, "
+        print(f"Checkpoint path: {local_path} ",
+              f"state_creation_time:{state_creation_time:.2f}s, "
               f"cache_empty_time:{cache_empty_time:.2f}s, "
-              f"tiered_ckpt_init_time:{tiered_ckpt_init_time:2f}s, "
-              f"future_wait_time:{future_wait_time:2f}s, "
-              f"async_save_time:{async_save_time}s, "
+              f"ckpt_save_time:{cpkt_save_time}s, "
               f"barrier_wait_time:{barrier_wait_time}s, "
               f"total_time:{func_end_time}s")
 
