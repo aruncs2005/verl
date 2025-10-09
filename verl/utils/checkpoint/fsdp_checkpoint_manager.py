@@ -104,7 +104,8 @@ class CheckpointState(Stateful):
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self.rng_state_fn = rng_state_fn  # function that returns RNG state dict
+        # rng_state_fn should be a getter function (no parameters) that returns RNG state dict
+        self.rng_state_fn = rng_state_fn
         self.dataloader = dataloader
         self.global_step = global_step
 
@@ -143,17 +144,19 @@ class CheckpointState(Stateful):
             self.lr_scheduler.load_state_dict(state_dict["extra"]["lr_scheduler"])
 
         print(f"Extra state keys: {state_dict.get('extra', {}).keys()}")
-        # Restore RNG state if rng_state_fn and corresponding state is provided
-        print(f"Has rng_state_fn: {self.rng_state_fn is not None}")
+        # Restore RNG state directly without using rng_state_fn
         print(f"Has RNG state: {state_dict.get('extra', {}).get('rng') is not None}")
-        if self.rng_state_fn and state_dict.get("extra", {}).get("rng") is not None:
+        if state_dict.get("extra", {}).get("rng") is not None:
             rng_state = state_dict["extra"]["rng"]
             print(f"RNG state type: {type(rng_state)}")
             print(f"RNG state content: {rng_state}")
-            # Assume rng_state_fn is a setter function or callable to restore RNG state
-            # If rng_state_fn is a getter, then you need to define a setter separately
-            # This example assumes rng_state_fn sets RNG state when called with arg
-            self.rng_state_fn(rng_state)
+            # Restore RNG state directly
+            if "cpu_rng_state" in rng_state and rng_state["cpu_rng_state"] is not None:
+                torch.set_rng_state(rng_state["cpu_rng_state"])
+                print("Restored CPU RNG state")
+            if "cuda_rng_state" in rng_state and rng_state["cuda_rng_state"] is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(rng_state["cuda_rng_state"])
+                print("Restored CUDA RNG state")
 
         # New dataloader loading logic
         if self.dataloader and state_dict.get("extra", {}).get("dataloader") is not None:
@@ -248,8 +251,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.model,
             self.optimizer if self.should_load_optimizer else None,
             self.lr_scheduler if self.should_load_extra else None,
-            rng_state_fn=(lambda rng_state: torch.set_rng_state(rng_state["cpu_rng_state"]))
-                         if self.should_load_extra else None,
+            rng_state_fn=None,  # Don't use rng_state_fn for loading, handle in load_state_dict
             dataloader=self.dataloader if self.should_load_extra else None
         )
         try:
@@ -332,7 +334,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.optimizer if self.should_save_optimizer else None,
             self.lr_scheduler if self.should_save_extra else None,
             rng_state_fn=get_rng_state if self.should_save_extra else None,
-            dataloader=self.train_dataloader if self.should_save_extra else None, # Added this line
+            dataloader=self.dataloader if self.should_save_extra else None,  # Use self.dataloader instead
             global_step=global_step if self.should_save_extra else 0
         )
         state_creation_time = time.perf_counter() - start
