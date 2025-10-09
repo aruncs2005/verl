@@ -21,7 +21,7 @@ import torch
 import torch.distributed
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizer, ProcessorMixin
-
+from torchdata.stateful_dataloader import StatefulDataLoader
 from verl.trainer.config import CheckpointConfig
 from verl.utils.device import get_device_name, get_torch_device
 
