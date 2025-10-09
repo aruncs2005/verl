@@ -113,9 +113,19 @@ class CheckpointState(Stateful):
         model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)
         lr_scheduler_state_dict = self.lr_scheduler.state_dict() if self.lr_scheduler else None
         dataloader_state_dict = self.dataloader.state_dict() if self.dataloader else None
+        
+        # Always include RNG state in a consistent format
+        rng_state = None
+        if self.rng_state_fn:
+            try:
+                rng_state = self.rng_state_fn()
+            except Exception as e:
+                print(f"Warning: Failed to get RNG state: {e}")
+                rng_state = None
+        
         extra_state = {
             "lr_scheduler": lr_scheduler_state_dict,
-            "rng": self.rng_state_fn() if self.rng_state_fn else None,
+            "rng": rng_state,
             "dataloader": dataloader_state_dict,
             "global_step": self.global_step
         }
@@ -144,19 +154,21 @@ class CheckpointState(Stateful):
             self.lr_scheduler.load_state_dict(state_dict["extra"]["lr_scheduler"])
 
         print(f"Extra state keys: {state_dict.get('extra', {}).keys()}")
-        # Restore RNG state directly without using rng_state_fn
+        # Restore RNG state from loaded checkpoint
         print(f"Has RNG state: {state_dict.get('extra', {}).get('rng') is not None}")
         if state_dict.get("extra", {}).get("rng") is not None:
             rng_state = state_dict["extra"]["rng"]
             print(f"RNG state type: {type(rng_state)}")
-            print(f"RNG state content: {rng_state}")
-            # Restore RNG state directly
-            if "cpu_rng_state" in rng_state and rng_state["cpu_rng_state"] is not None:
-                torch.set_rng_state(rng_state["cpu_rng_state"])
-                print("Restored CPU RNG state")
-            if "cuda_rng_state" in rng_state and rng_state["cuda_rng_state"] is not None and torch.cuda.is_available():
-                torch.cuda.set_rng_state_all(rng_state["cuda_rng_state"])
-                print("Restored CUDA RNG state")
+            # Restore RNG state directly (don't rely on rng_state_fn for loading)
+            if isinstance(rng_state, dict):
+                if "cpu_rng_state" in rng_state and rng_state["cpu_rng_state"] is not None:
+                    torch.set_rng_state(rng_state["cpu_rng_state"])
+                    print("Restored CPU RNG state")
+                if "cuda_rng_state" in rng_state and rng_state["cuda_rng_state"] is not None and torch.cuda.is_available():
+                    torch.cuda.set_rng_state_all(rng_state["cuda_rng_state"])
+                    print("Restored CUDA RNG state")
+            else:
+                print(f"Warning: Unexpected RNG state format: {type(rng_state)}")
 
         # New dataloader loading logic
         if self.dataloader and state_dict.get("extra", {}).get("dataloader") is not None:
@@ -246,12 +258,19 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         """
         # Ensure required components exist
         assert self.model is not None, "Model must be provided for checkpoint loading"
+        # Create a dummy RNG state function for loading to maintain state dict structure
+        def dummy_rng_state_fn():
+            return {
+                "cpu_rng_state": torch.get_rng_state(),
+                "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            }
+        
         # Wrap stateful holder (will call load_state_dict automatically)
         state = CheckpointState(
             self.model,
             self.optimizer if self.should_load_optimizer else None,
             self.lr_scheduler if self.should_load_extra else None,
-            rng_state_fn=None,  # Don't use rng_state_fn for loading, handle in load_state_dict
+            rng_state_fn=dummy_rng_state_fn if self.should_load_extra else None,  # Maintain structure consistency
             dataloader=self.dataloader if self.should_load_extra else None
         )
         try:
@@ -278,17 +297,43 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 if checkpoint_id is None:
                     logger.warning(f"No checkpoint found under {local_path}")
                     return
+            
             load_start_time = time.perf_counter()
+            
+            # Use strict=False to allow missing keys in checkpoint
             dcp.load(
                 state_dict={"app": state},
                 storage_reader=reader,
                 checkpoint_id=checkpoint_id,
+                strict=False,  # Allow missing keys
             )
+            
             load_complete_time = time.perf_counter() - load_start_time
             print(f"Total time for checkpoint load: {load_complete_time:.2f}s")
             return state.global_step
         except BaseException as e:
             print(f"Load checkpoint failed: {str(e)}")
+            # If loading fails, try without extra state
+            if self.should_load_extra:
+                print("Retrying checkpoint load without extra state...")
+                try:
+                    state_minimal = CheckpointState(
+                        self.model,
+                        self.optimizer if self.should_load_optimizer else None,
+                        lr_scheduler=None,
+                        rng_state_fn=None,
+                        dataloader=None
+                    )
+                    dcp.load(
+                        state_dict={"app": state_minimal},
+                        storage_reader=reader,
+                        checkpoint_id=checkpoint_id,
+                        strict=False,
+                    )
+                    print("Successfully loaded checkpoint without extra state")
+                    return 0  # Return 0 since we don't have global_step
+                except Exception as e2:
+                    print(f"Minimal checkpoint load also failed: {str(e2)}")
             return 0
         torch.distributed.barrier()
 
