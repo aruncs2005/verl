@@ -277,12 +277,11 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                     logger.warning(f"No checkpoint found under {local_path}")
                     return
             load_start_time = time.perf_counter()
-            load_future = dcp.async_load(
+            dcp.load(
                 state_dict={"app": state},
                 storage_reader=reader,
                 checkpoint_id=checkpoint_id,
             )
-            load_future.result()
             load_complete_time = time.perf_counter() - load_start_time
             print(f"Total time for checkpoint load: {load_complete_time:.2f}s")
             return state.global_step
@@ -333,7 +332,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.optimizer if self.should_save_optimizer else None,
             self.lr_scheduler if self.should_save_extra else None,
             rng_state_fn=get_rng_state if self.should_save_extra else None,
-            dataloader=self.dataloader if self.should_save_extra else None, # Added this line
+            dataloader=self.train_dataloader if self.should_save_extra else None, # Added this line
             global_step=global_step if self.should_save_extra else 0
         )
         state_creation_time = time.perf_counter() - start
