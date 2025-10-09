@@ -298,7 +298,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.model,
             self.optimizer if self.should_save_optimizer else None,
             self.lr_scheduler if self.should_save_extra else None,
-            rng_state_fn=get_rng_state if self.should_save_extra else None,
+            rng_state_fn=self.get_rng_state if self.should_save_extra else None,
             dataloader=self.train_dataloader if self.should_save_extra else None, # Added this line
             global_step=global_step if self.should_save_extra else 0
         )
