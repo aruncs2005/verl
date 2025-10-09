@@ -47,6 +47,7 @@ class BaseCheckpointManager:
         lr_scheduler: torch.optim.lr_scheduler.LRScheduler = None,
         processing_class: PreTrainedTokenizer | ProcessorMixin = None,
         checkpoint_config: DictConfig | CheckpointConfig = None,
+        dataloader: StatefulDataLoader = None,  # Add this line
     ):
         self.checkpoint_config = checkpoint_config
         checkpoint_load_contents = checkpoint_config.get("load_contents", None) if checkpoint_config else None
@@ -64,6 +65,7 @@ class BaseCheckpointManager:
         self.processing_class = processing_class
         self.checkpoint_load_contents = checkpoint_load_contents
         self.checkpoint_save_contents = checkpoint_save_contents
+        self.dataloader = dataloader
 
         self.rank = torch.distributed.get_rank()
         self.world_size = torch.distributed.get_world_size()

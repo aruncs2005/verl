@@ -23,6 +23,7 @@ import os
 os.environ["NCCL_DEBUG"] = "WARN"
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
+import datetime
 import logging
 import re
 import time
@@ -530,46 +531,15 @@ class FSDPSFTTrainer:
 
     def save_checkpoint(self, step):
         """Save checkpoint using FSDPCheckpointManager with improved tracking"""
-        from verl.utils.fs import local_mkdir_safe
-
-        # Determine checkpoint path
-        local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{step}")
-
-        if self.device_mesh.get_rank() == 0:
-            print(f"Saving checkpoint to: {local_global_step_folder}")
-
         # Get max checkpoints to keep
         max_ckpt_to_keep = getattr(self.config.trainer, "max_ckpt_to_keep", None)
-
         # Use checkpoint manager to save
         self.checkpoint_manager.save_checkpoint(
-            local_path=local_global_step_folder, global_step=step,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace,max_ckpt_to_keep=max_ckpt_to_keep
+            global_step=step,
+            s3_base_path=self.config.trainer.s3_base_path,
+            ckpt_namespace=self.config.trainer.ckpt_namespace,
+            max_ckpt_to_keep=max_ckpt_to_keep
         )
-
-        # Save dataloader state
-        if self.device_mesh.get_rank() == 0:
-            local_mkdir_safe(local_global_step_folder)
-            dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
-
-            # Use StatefulDataLoader's built-in state dict functionality
-            dataloader_state_dict = self.train_dataloader.state_dict()
-            torch.save(dataloader_state_dict, dataloader_local_path)
-            print(f"Saved dataloader state to: {dataloader_local_path}")
-
-            # Update latest checkpoint tracker (atomic write)
-            tracker_file = get_checkpoint_tracker_filename(self.config.trainer.default_local_dir)
-            temp_tracker_file = tracker_file + ".tmp"
-            with open(temp_tracker_file, "w") as f:
-                f.write(str(step))
-            os.rename(temp_tracker_file, tracker_file)
-            print(f"Updated checkpoint tracker: {tracker_file}")
-
-        # Copy to HDFS if configured
-        if self.device_mesh.get_rank() == 0 and getattr(self.config.trainer, "default_hdfs_dir", None):
-            hdfs_io.makedirs(self.config.trainer.default_hdfs_dir, exist_ok=True)
-            hdfs_io.copy(src=local_global_step_folder, dst=self.config.trainer.default_hdfs_dir, dirs_exist_ok=True)
-
-        torch.distributed.barrier()
 
     def _init_checkpoint_manager(self):
         """Initialize checkpoint manager with proper configuration"""
@@ -596,106 +566,22 @@ class FSDPSFTTrainer:
             lr_scheduler=self.lr_scheduler,
             processing_class=self.tokenizer,
             checkpoint_config=checkpoint_config_dict,
+            dataloader=self.train_dataloader
         )
 
     def load_checkpoint(self):
-        # Determine resume path based on configuration
-        checkpoint_path = self._determine_resume_path()
-
-        if checkpoint_path is None:
-            return 0
-
-        # extract resume step from checkpoint path
-        resume_step = extract_step(checkpoint_path)
-        if resume_step is None:
-            log_with_rank(
-                f"Warning: Could not extract step number from {checkpoint_path}, starting from step 0",
-                logger=logger,
-                rank=self.device_mesh.get_rank(),
-                level=logging.WARNING,
-                log_only_rank_0=True,
-            )
-            return 0
-        self.resume_global_step = resume_step
-
         # Use checkpoint manager to load model state
-        self.checkpoint_manager.load_checkpoint(checkpoint_path,s3_base_path=self.config.trainer.s3_base_path, ckpt_namespace=self.config.trainer.ckpt_namespace)
-        log_with_rank(
-            f"Successfully loaded model checkpoint from {checkpoint_path} (step {resume_step})",
-            logger=logger,
-            rank=self.device_mesh.get_rank(),
-            log_only_rank_0=True,
-        )
-
-        # Always load dataloader state for StatefulDataLoader
-        self._load_dataloader_state(checkpoint_path)
-
-        return resume_step
-
-    def _load_dataloader_state(self, checkpoint_path: str):
-        """Load dataloader state from checkpoint"""
-        dataloader_path = os.path.join(checkpoint_path, "data.pt")
-
-        if os.path.exists(dataloader_path):
-            # Use StatefulDataLoader's built-in state dict functionality
-            dataloader_state_dict = torch.load(dataloader_path, map_location="cpu", weights_only=False)
-            self.train_dataloader.load_state_dict(dataloader_state_dict)
-
+        try:
+            self.resume_global_step = self.checkpoint_manager.load_checkpoint(
+                ckpt_namespace=self.config.trainer.ckpt_namespace)
             log_with_rank(
-                f"Successfully loaded dataloader state from {dataloader_path}",
+                f"Successfully loaded model checkpoint for {self.resume_global_step}",
                 logger=logger,
                 rank=self.device_mesh.get_rank(),
                 log_only_rank_0=True,
             )
-
-        else:
-            log_with_rank(
-                f"Warning: No dataloader state found at {dataloader_path}, will start from scratch",
-                logger=logger,
-                rank=self.device_mesh.get_rank(),
-                level=logging.WARNING,
-                log_only_rank_0=True,
-            )
-
-    def _determine_resume_path(self):
-        """Determine the path to resume from based on resume_mode configuration"""
-        resume_mode = getattr(self.config.trainer, "resume_mode", "auto")
-        resume_from_path = getattr(self.config.trainer, "resume_from_path", None)
-
-        if resume_mode == "disable":
-            return None
-        elif resume_mode == "auto":
-            if resume_from_path is not None:
-                assert os.path.exists(resume_from_path), (
-                    "resume_from_path must be null or an existing path when resume_mode is 'auto'"
-                )
-                assert "global_step_" in resume_from_path, "resume_from_path must specify the global_steps"
-                return resume_from_path
-            # Try to find the latest checkpoint in the default directory
-            return self._find_latest_checkpoint()
-        elif resume_mode == "resume_path":
-            assert os.path.exists(resume_from_path), (
-                "resume_from_path must be an existing path when resume_mode is 'resume_path'"
-            )
-            assert "global_step_" in resume_from_path, "resume_from_path must specify the global_steps"
-            return resume_from_path
-        else:
-            raise ValueError(f"Invalid resume_mode: {resume_mode}. Must be 'auto', 'disable', or 'resume_path'")
-
-    def _find_latest_checkpoint(self):
-        """Find the latest checkpoint in the default local directory"""
-        checkpoint_dir = self.config.trainer.default_local_dir
-
-        if not os.path.exists(checkpoint_dir):
-            return None
-
-        latest_checkpoint = find_latest_ckpt_path(checkpoint_dir)
-
-        if latest_checkpoint and self.device_mesh.get_rank() == 0:
-            step_num = extract_step(latest_checkpoint)
-            print(f"Found latest checkpoint: {latest_checkpoint} (step {step_num})")
-
-        return latest_checkpoint
+        except Exception as e:
+            log_with_rank(f"load_checkpoint failed:{str(e)}", logger=logger, rank=self.device_mesh.get_rank())
 
     def fit(self):
         rank = self.device_mesh.get_rank()
@@ -754,7 +640,10 @@ class FSDPSFTTrainer:
             ):
                 global_step += 1
                 data = TensorDict(data, batch_size=self.config.data.train_batch_size).to(self.device_name)
+                start = time.perf_counter()
                 metric = self.training_step(data)
+                end = time.perf_counter()
+                training_time = (end - start)
                 train_time += metric["train/time(s)"]
                 if rank == 0:
                     tracking.log(data=metric, step=global_step)
@@ -780,9 +669,12 @@ class FSDPSFTTrainer:
                         last_valid_metric = metric
                     torch.distributed.barrier()
 
+                checkpoint_save_time = 0
                 if is_last_step or (self.config.trainer.save_freq > 0 and is_save_step):
+                    start = time.perf_counter()
                     self.save_checkpoint(step=global_step)
-
+                    checkpoint_save_time = time.perf_counter() - start
+                print(f"step:{global_step}, training_time:{training_time:.2f}s, checkpoint_save_time:{checkpoint_save_time:.2f}s")
                 if is_last_step:
                     if rank == 0:
                         print(f"Total time for train steps: {train_time:.2f}s")
@@ -795,13 +687,25 @@ def custom_run_sft(config: DictConfig) -> None:
     Args:
         config: Training configuration
     """
+    import torch.distributed as dist
     from torch.distributed.device_mesh import init_device_mesh
     from verl.utils.fs import copy_to_local
     from verl.trainer.fsdp_sft_trainer import FSDPSFTTrainer, create_sft_dataset
     from verl.utils import hf_tokenizer
 
     device_name = "cuda"
-    world_size = int(os.environ["WORLD_SIZE"])  # automatically set by Ray
+
+    # Ray TorchTrainer already initializes the process group with NCCL
+    # We should NOT call initialize_global_process_group_ray() here
+    if not dist.is_initialized():
+        raise RuntimeError("Expected Ray TorchTrainer to initialize process group, but it's not initialized")
+
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
+
+    logger.info(f"Ray distributed setup - Rank: {rank}, World size: {world_size}")
+    logger.info(f"Process group backend: {dist.get_backend()}")
+
     device_mesh = init_device_mesh(
         device_type=device_name, mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
     )
@@ -834,6 +738,8 @@ def custom_run_sft(config: DictConfig) -> None:
 
 def run_sft(config):
     device_name = get_device_name()
+    import os
+    os.environ["PL_TORCH_DISTRIBUTED_BACKEND"] = "nccl"
     #local_rank, rank, world_size = initialize_global_process_group()
     from verl.utils.distributed import initialize_global_process_group_ray
 
@@ -869,14 +775,24 @@ def run_sft(config):
 
 
 def launch_ray(config):
-        
+
         logger.info("🚀 Starting SFT Training function")
         num_workers = 32
         scaling_config = ScalingConfig(
             num_workers=num_workers, use_gpu=True, resources_per_worker={"GPU": 1}
         )  # always keep resources_per_worker to 1 GPU per worker. RayTrainer will automatically set the number of workers based on the number of nodes and GPUs per node.
+
+        # Configure TorchConfig with proper NCCL backend and timeout
+        torch_config = ray.train.torch.TorchConfig(
+            backend="cpu:gloo,cuda:nccl",  # Use NCCL for all communication
+            timeout_s=1800,  # 30 minute timeout
+        )
+
         ray_trainer = TorchTrainer(
-            custom_run_sft, train_loop_config=config,torch_config=ray.train.torch.TorchConfig(backend=f"cpu:gloo,cuda:nccl"), scaling_config=scaling_config
+            custom_run_sft,
+            train_loop_config=config,
+            torch_config=torch_config,
+            scaling_config=scaling_config
         )
         ray_trainer.fit()
 

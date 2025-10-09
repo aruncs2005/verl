@@ -23,6 +23,7 @@ import torch
 import torch.distributed
 from accelerate import init_empty_weights
 from omegaconf import DictConfig
+from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
 
@@ -38,7 +39,7 @@ from verl.utils.logger import log_with_rank
 from .checkpoint_manager import BaseCheckpointManager
 
 import torch.distributed.checkpoint as dcp
-from torch.distributed.checkpoint import FileSystemWriter
+from torch.distributed.checkpoint import FileSystemWriter, FileSystemReader
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.checkpoint.state_dict import get_state_dict
 
@@ -99,18 +100,23 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 class CheckpointState(Stateful):
-    def __init__(self, model, optimizer=None, lr_scheduler=None, rng_state_fn=None):
+    def __init__(self, model, optimizer=None, lr_scheduler=None, rng_state_fn=None, dataloader=None, global_step=0):
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.rng_state_fn = rng_state_fn  # function that returns RNG state dict
+        self.dataloader = dataloader
+        self.global_step = global_step
 
     def state_dict(self):
         model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)
         lr_scheduler_state_dict = self.lr_scheduler.state_dict() if self.lr_scheduler else None
+        dataloader_state_dict = self.dataloader.state_dict() if self.dataloader else None
         extra_state = {
             "lr_scheduler": lr_scheduler_state_dict,
             "rng": self.rng_state_fn() if self.rng_state_fn else None,
+            "dataloader": dataloader_state_dict,
+            "global_step": self.global_step
         }
         return {
             "model": model_state_dict,
@@ -130,7 +136,7 @@ class CheckpointState(Stateful):
         if self.lr_scheduler and state_dict.get("extra", {}).get("lr_scheduler") is not None:
             self.lr_scheduler.load_state_dict(state_dict["extra"]["lr_scheduler"])
 
-            # Restore RNG state if rng_state_fn and corresponding state is provided
+        # Restore RNG state if rng_state_fn and corresponding state is provided
         if self.rng_state_fn and state_dict.get("extra", {}).get("rng") is not None:
             rng_state = state_dict["extra"]["rng"]
             # Assume rng_state_fn is a setter function or callable to restore RNG state
@@ -138,6 +144,13 @@ class CheckpointState(Stateful):
             # This example assumes rng_state_fn sets RNG state when called with arg
             self.rng_state_fn(rng_state)
 
+        # New dataloader loading logic
+        if self.dataloader and state_dict.get("extra", {}).get("dataloader") is not None:
+            self.dataloader.load_state_dict(state_dict["extra"]["dataloader"])
+
+        # Add step loading
+        if state_dict.get("extra", {}).get("global_step") is not None:
+            self.global_step = state_dict["extra"]["global_step"]
 @dataclass
 class FSDPConfig:
     """Configuration for FSDP checkpointing.
@@ -177,6 +190,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         processing_class: PreTrainedTokenizer | ProcessorMixin = None,
         checkpoint_config: DictConfig = None,
+        dataloader: Optional[StatefulDataLoader] = None,
         **kwargs,
     ):
         if processing_class is None:
@@ -192,9 +206,16 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             lr_scheduler=lr_scheduler,
             processing_class=processing_class,
             checkpoint_config=checkpoint_config,
+            dataloader=dataloader
         )
 
-    def load_checkpoint(self, local_path: str, hdfs_path: str = None, s3_base_path: str= None, ckpt_namespace:str = None, del_local_after_load=False):
+    def load_checkpoint(
+            self,
+            local_path: str = None,
+            hdfs_path: str = None,
+            s3_base_path: str = None,
+            ckpt_namespace: str = None,
+            del_local_after_load=False):
         """
         Load an FSDP checkpoint for this rank.
 
@@ -207,12 +228,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             hdfs_path: Unused (for API compatibility).
             del_local_after_load: Remove local files after loading.
         """
-        if local_path is None:
-            return
-
         # Ensure required components exist
         assert self.model is not None, "Model must be provided for checkpoint loading"
-
         # Wrap stateful holder (will call load_state_dict automatically)
         state = CheckpointState(
             self.model,
@@ -220,44 +237,47 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.lr_scheduler if self.should_load_extra else None,
             rng_state_fn=(lambda rng_state: torch.set_rng_state(rng_state["cpu_rng_state"]))
                          if self.should_load_extra else None,
+            dataloader=self.train_dataloader if self.should_load_extra else None
         )
-
-        # Setup SageMaker Tiered Storage Reader
-        smcheckpointconfig = SageMakerCheckpointConfig(
-            namespace=ckpt_namespace,
-            world_size=torch.distributed.get_world_size(),
-            s3_tier_base_path=s3_base_path,
-            logger=logger,
-            save_to_s3=True
-        )
-        checkpoint_reader = SageMakerTieredStorageReader(
-            checkpoint_config=smcheckpointconfig
-        )
-
-        # Typically we load the latest step, so try to infer a checkpoint_id
-        # For example: look for "step_x" directories inside local_path
-        checkpoint_id = None
-        if os.path.exists(local_path):
-            candidates = [d for d in os.listdir(local_path) if d.startswith("step_")]
-            if candidates:
-                checkpoint_id = sorted(candidates)[-1]  # latest checkpoint
-        if checkpoint_id is None:
-            logger.warning(f"No checkpoint found under {local_path}")
-            return
-
-        # Now perform distributed checkpoint load
-        load_future = dcp.async_load(
-            state_dict={"app": state},
-            storage_reader=checkpoint_reader,
-            checkpoint_id=checkpoint_id,
-        )
-        load_future.result()
-
+        try:
+            # Now perform distributed checkpoint load
+            checkpoint_id = None
+            if local_path is None:
+                # Setup SageMaker Tiered Storage Reader
+                smcheckpointconfig = SageMakerCheckpointConfig(
+                    namespace=ckpt_namespace,
+                    world_size=torch.distributed.get_world_size(),
+                    s3_tier_base_path=s3_base_path,
+                    logger=logger,
+                )
+                reader = SageMakerTieredStorageReader(
+                    checkpoint_config=smcheckpointconfig,
+                    step = None
+                )
+            else:
+                reader = FileSystemReader(local_path)
+                if os.path.exists(local_path):
+                    candidates = [d for d in os.listdir(local_path) if d.startswith("step_")]
+                    if candidates:
+                        checkpoint_id = sorted(candidates)[-1]  # latest checkpoint
+                if checkpoint_id is None:
+                    logger.warning(f"No checkpoint found under {local_path}")
+                    return
+            load_start_time = time.perf_counter()
+            dcp.load(
+                state_dict={"app": state},
+                storage_reader=reader,
+                checkpoint_id=checkpoint_id,
+            )
+            load_complete_time = time.perf_counter() - load_start_time
+            print(f"Total time for checkpoint load: {load_complete_time:.2f}s")
+            return state.global_step
+        except BaseException as e:
+            print(f"Load checkpoint failed: {str(e)}")
         torch.distributed.barrier()
 
 
-
-    def save_checkpoint(self, local_path: str, hdfs_path: str = None,
+    def save_checkpoint(self, local_path: str =None, hdfs_path: str = None,
                         global_step: int = 0,s3_base_path: str = None,
                         ckpt_namespace: str = None , max_ckpt_to_keep=None):
         """
@@ -298,6 +318,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.optimizer if self.should_save_optimizer else None,
             self.lr_scheduler if self.should_save_extra else None,
             rng_state_fn=get_rng_state if self.should_save_extra else None,
+            dataloader=self.train_dataloader if self.should_save_extra else None, # Added this line
+            global_step=global_step if self.should_save_extra else 0
         )
         state_creation_time = time.perf_counter() - start
 
@@ -306,63 +328,59 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         torch.cuda.empty_cache()
         cache_empty_time = time.perf_counter() - start
 
-        #start = time.perf_counter()
-        #smcheckpointconfig = SageMakerCheckpointConfig(
-        #    namespace=ckpt_namespace,
-        #    world_size=torch.distributed.get_world_size(),
-        #    s3_tier_base_path=s3_base_path,
-        #    logger=logger,
-        #    save_to_s3=False
-        #)
-        #self.checkpoint_writer = SageMakerTieredStorageWriter(
-        #    checkpoint_config=smcheckpointconfig,
-        #    step=global_step
-        #)
-        #tiered_ckpt_init_time = time.perf_counter() - start
-
         # Await previous async save result to avoid multiple concurrent saves
-        #future_wait_time = 0
-        #if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
-        #    start = time.perf_counter()
-        #    exc = self.checkpoint_future.exception()
-        #    if exc:
-        #        print(f"Failure in saving previous checkpoint:{str(exc)}")
-        #        #Handle failures as required
-        #    else:
-        #        result = self.checkpoint_future.result()
-        #    future_wait_time = time.perf_counter() - start
+        future_wait_time = 0
+        if hasattr(self, "checkpoint_future") and self.checkpoint_future is not None:
+            start = time.perf_counter()
+            exc = self.checkpoint_future.exception()
+            if exc:
+                print(f"Failure in saving previous checkpoint:{str(exc)}")
+                #Handle failures as required
+            else:
+                self.checkpoint_future.result()
+            future_wait_time = time.perf_counter() - start
 
-        #start = time.perf_counter()
-        #checkpoint_id = f"step_{global_step}"
-        #self.checkpoint_future = dcp.async_save(
-        #    state_dict={"app": state},
-        #    storage_writer=self.checkpoint_writer,
-        #    checkpoint_id=checkpoint_id,
-        #)
-        #async_save_time = time.perf_counter() - start
-
-        writer = FileSystemWriter(local_path)
-        checkpoint_id = f"step_{global_step}"
+        tiered_ckpt_init_time = 0
         start = time.perf_counter()
-        future = dcp.async_save(
+        checkpoint_id = f"step_{global_step}"
+        if local_path:
+            writer = FileSystemWriter(local_path)
+            checkpoint_id = f"step_{global_step}"
+            self.checkpoint_future = dcp.async_save(
+                state_dict={"app": state},
+                storage_writer=writer,
+                checkpoint_id=checkpoint_id,
+            )
+        else:
+            start = time.perf_counter()
+            smcheckpointconfig = SageMakerCheckpointConfig(
+                namespace=ckpt_namespace,
+                world_size=torch.distributed.get_world_size(),
+                s3_tier_base_path=s3_base_path,
+                logger=logger,
+                save_to_s3=False
+            )
+            writer = SageMakerTieredStorageWriter(
+                checkpoint_config=smcheckpointconfig,
+                step=global_step
+            )
+            tiered_ckpt_init_time = time.perf_counter() - start
+
+        start = time.perf_counter()
+        self.checkpoint_future = dcp.async_save(
             state_dict={"app": state},
             storage_writer=writer,
             checkpoint_id=checkpoint_id,
         )
-        future.result()
-        cpkt_save_time = time.perf_counter() - start
-
+        async_save_time = time.perf_counter() - start
         start = time.perf_counter()
         torch.distributed.barrier()
         barrier_wait_time = time.perf_counter() - start
         func_end_time = time.perf_counter() - func_start
-        print(f"Checkpoint path: {local_path} ",
-              f"state_creation_time:{state_creation_time:.2f}s, "
+        print(f"state_creation_time:{state_creation_time:.2f}s, "
               f"cache_empty_time:{cache_empty_time:.2f}s, "
-              f"cpkt_save_time:{cpkt_save_time}s, "
-              f"barrier_wait_time:{barrier_wait_time}s, "
-              f"total_time:{func_end_time}s")
-
-
-
-
+              f"tiered_ckpt_init_time:{tiered_ckpt_init_time:.2f}s",
+              f"future_wait_time:{future_wait_time:.2f}s",
+              f"async_save_time:{async_save_time:.2f}s, "
+              f"barrier_wait_time:{barrier_wait_time:.2f}s, "
+              f"total_time:{func_end_time:.2f}s")
