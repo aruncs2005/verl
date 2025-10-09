@@ -352,7 +352,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             checkpoint_id=checkpoint_id,
             #process_group=checkpoint_pg
         )
-        self.checkpoint_future.result()
+        #self.checkpoint_future.result()
         async_save_time = time.perf_counter() - start
 
         start = time.perf_counter()
