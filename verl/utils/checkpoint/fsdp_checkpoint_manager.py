@@ -237,7 +237,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.lr_scheduler if self.should_load_extra else None,
             rng_state_fn=(lambda rng_state: torch.set_rng_state(rng_state["cpu_rng_state"]))
                          if self.should_load_extra else None,
-            dataloader=self.train_dataloader if self.should_load_extra else None
+            dataloader=self.dataloader if self.should_load_extra else None
         )
         try:
             # Now perform distributed checkpoint load

@@ -574,14 +574,13 @@ class FSDPSFTTrainer:
         try:
             self.resume_global_step = self.checkpoint_manager.load_checkpoint(
                 ckpt_namespace=self.config.trainer.ckpt_namespace)
-            log_with_rank(
-                f"Successfully loaded model checkpoint for {self.resume_global_step}",
-                logger=logger,
-                rank=self.device_mesh.get_rank(),
-                log_only_rank_0=True,
+            print(
+                f"[Rank {self.device_mesh.get_rank()}] Successfully loaded model checkpoint for " +
+                f"step {self.resume_global_step}",
             )
         except Exception as e:
-            log_with_rank(f"load_checkpoint failed:{str(e)}", logger=logger, rank=self.device_mesh.get_rank())
+            print(f"[Rank {self.device_mesh.get_rank()}]load_checkpoint failed:{str(e)}",
+                  logger=logger, rank=self.device_mesh.get_rank())
 
     def fit(self):
         rank = self.device_mesh.get_rank()
