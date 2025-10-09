@@ -125,10 +125,16 @@ class CheckpointState(Stateful):
         }
 
     def load_state_dict(self, state_dict):
+        if not state_dict:
+            return
+
+        print("Starting load_state_dict")
         # Implement loading logic, if needed
         self.model.load_state_dict(state_dict["model"])
 
         # Load optimizer state dict if optimizer exists and state is provided
+        print(f"Has optimizer: {self.optimizer is not None}, " +
+              f"Has optimizer state: {state_dict.get('optimizer') is not None}")
         if self.optimizer and state_dict.get("optimizer") is not None:
             self.optimizer.load_state_dict(state_dict["optimizer"])
 
@@ -136,9 +142,14 @@ class CheckpointState(Stateful):
         if self.lr_scheduler and state_dict.get("extra", {}).get("lr_scheduler") is not None:
             self.lr_scheduler.load_state_dict(state_dict["extra"]["lr_scheduler"])
 
+        print(f"Extra state keys: {state_dict.get('extra', {}).keys()}")
         # Restore RNG state if rng_state_fn and corresponding state is provided
+        print(f"Has rng_state_fn: {self.rng_state_fn is not None}")
+        print(f"Has RNG state: {state_dict.get('extra', {}).get('rng') is not None}")
         if self.rng_state_fn and state_dict.get("extra", {}).get("rng") is not None:
             rng_state = state_dict["extra"]["rng"]
+            print(f"RNG state type: {type(rng_state)}")
+            print(f"RNG state content: {rng_state}")
             # Assume rng_state_fn is a setter function or callable to restore RNG state
             # If rng_state_fn is a getter, then you need to define a setter separately
             # This example assumes rng_state_fn sets RNG state when called with arg
@@ -151,6 +162,8 @@ class CheckpointState(Stateful):
         # Add step loading
         if state_dict.get("extra", {}).get("global_step") is not None:
             self.global_step = state_dict["extra"]["global_step"]
+        print("Finished load_state_dict")
+
 @dataclass
 class FSDPConfig:
     """Configuration for FSDP checkpointing.
@@ -274,6 +287,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             return state.global_step
         except BaseException as e:
             print(f"Load checkpoint failed: {str(e)}")
+            return 0
         torch.distributed.barrier()
 
 
