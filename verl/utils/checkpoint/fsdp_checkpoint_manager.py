@@ -79,9 +79,11 @@ class CheckpointState(Stateful):
         model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)
         lr_scheduler_state_dict = self.lr_scheduler.state_dict() if self.lr_scheduler else None
         dataloader_state_dict = self.dataloader.state_dict() if self.dataloader else None
+        rng_state = {"cpu_rng_state": torch.get_rng_state()} if self.rng_state_fn else None
+
         extra_state = {
             "lr_scheduler": lr_scheduler_state_dict,
-            "rng": self.rng_state_fn() if self.rng_state_fn else None,
+            "rng": rng_state,
             "dataloader": dataloader_state_dict,
             "global_step": self.global_step
         }
