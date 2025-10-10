@@ -215,7 +215,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             self.model,
             self.optimizer if self.should_load_optimizer else None,
             self.lr_scheduler if self.should_load_extra else None,
-            rng_state_fn=(lambda rng_state: torch.set_rng_state(rng_state["cpu_rng_state"]))
+            rng_state_fn=self.load_rng_state(rng_state)
                          if self.should_load_extra else None,
             dataloader=self.dataloader if self.should_load_extra else None
         )
