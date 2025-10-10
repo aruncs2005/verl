@@ -571,7 +571,7 @@ class FSDPSFTTrainer:
 
     def load_checkpoint(self):
         # Use checkpoint manager to load model state
-        prinf(f"load_checkpoint++")
+        print(f"load_checkpoint++")
         try:
             self.resume_global_step = self.checkpoint_manager.load_checkpoint(
                 ckpt_namespace=self.config.trainer.ckpt_namespace)
@@ -581,7 +581,7 @@ class FSDPSFTTrainer:
             )
         except Exception as e:
             print(f"[Rank {self.device_mesh.get_rank()}] load_checkpoint failed:{str(e)}")
-        prinf(f"load_checkpoint--")
+        print(f"load_checkpoint--")
 
     def fit(self):
         rank = self.device_mesh.get_rank()
