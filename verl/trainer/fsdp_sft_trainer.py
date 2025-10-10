@@ -579,8 +579,7 @@ class FSDPSFTTrainer:
                 f"step {self.resume_global_step}",
             )
         except Exception as e:
-            log_with_rank(f"[Rank {self.device_mesh.get_rank()}]load_checkpoint failed:{str(e)}",
-                  logger=logger, rank=self.device_mesh.get_rank())
+            print(f"[Rank {self.device_mesh.get_rank()}] load_checkpoint failed:{str(e)}")
 
     def fit(self):
         rank = self.device_mesh.get_rank()
